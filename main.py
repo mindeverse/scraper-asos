@@ -110,13 +110,11 @@ def run_scrape() -> dict[str, Any]:
 
     supa = SupabaseClient()
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        future_scrape = executor.submit(scrape_all_categories)
-        future_existing = executor.submit(supa.fetch_existing_products, cfg.SOURCE)
-        future_emb = executor.submit(supa.fetch_urls_with_embeddings, cfg.SOURCE)
-        scraped = future_scrape.result()
-        existing = future_existing.result()
-        emb_urls = future_emb.result()
+    # Scrape first, then DB reads (sequential). Parallel DB+scrape competed with
+    # dying embed workers and caused "Server disconnected" → empty existing → full re-embed.
+    scraped = scrape_all_categories()
+    existing = supa.fetch_existing_products(cfg.SOURCE)
+    emb_urls = supa.fetch_urls_with_embeddings(cfg.SOURCE)
 
     if not scraped:
         logger.error("No products scraped")
