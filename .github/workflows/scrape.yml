@@ -55,11 +55,13 @@ jobs:
           python3 -c "
           import json
           d = json.load(open('logs/scrape_output.json'))
-          print(f'total_products={len(d[\"scraped\"])}')
+          total = d.get('scraped_count') or len(d.get('scraped_urls') or d.get('scraped') or [])
+          print(f'total_products={total}')
           print(f'to_embed={len(d[\"to_embed\"])}')
           " | tee /tmp/scrape_out.txt
           echo "total_products=$(grep total_products /tmp/scrape_out.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
           echo "to_embed=$(grep to_embed /tmp/scrape_out.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
 
       - name: Upload scrape output
         uses: actions/upload-artifact@v4
