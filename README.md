@@ -6,7 +6,7 @@ Finds production scraper for **ASOS** (aggregator).
 - Source: `scraper-asos`
 - Catalog API: `https://www.asos.com/api/product/search/v2/categories/{cid}` via `curl_cffi` (Chrome impersonation)
 - Embeddings: local SigLIP `google/siglip-base-patch16-384`
-- CI: **parallel scrape → 20× embed matrix** (same architecture as scraper-kith / scraper-reserved)
+- CI: **parallel scrape → 30× embed matrix** (same architecture as scraper-kith / scraper-reserved)
 - Schedule: Mon/Wed/Fri 06:17 UTC
 
 ```bash
