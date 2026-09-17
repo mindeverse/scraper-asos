@@ -163,12 +163,14 @@ def run_scrape() -> dict[str, Any]:
         u: {k: v for k, v in row.items() if not k.startswith("image_embedding") and not k.startswith("back_image_embedding") and not k.startswith("info_embedding")}
         for u, row in existing.items()
     }
+    # Keep artifact lean: full to_embed rows + URL list for stale detection (not full scraped rows).
     output = {
-        "scraped": scraped,
+        "scraped_urls": [r["product_url"] for r in scraped],
         "to_embed": to_embed,
         "existing_embeddings": existing_embeddings,
         "existing": existing_light,
         "unchanged": unchanged,
+        "scraped_count": len(scraped),
     }
     out_path = Path("logs/scrape_output.json")
     out_path.write_text(json.dumps(output), encoding="utf-8")
@@ -208,7 +210,7 @@ def run_embed_only(chunk_index: int, total_chunks: int) -> dict[str, Any]:
     rows = [_to_db_row(r) for r in products_embedded]
     ok, fail = supa.upsert_products(rows, batch_size=cfg.BATCH_SIZE)
 
-    seen_urls = {p["product_url"] for p in data["scraped"]}
+    seen_urls = set(data.get("scraped_urls") or [p["product_url"] for p in data.get("scraped", [])])
     stale_tracker = load_stale_tracker()
     deleted, updated_tracker = handle_stale_products(
         supa,
