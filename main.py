@@ -47,9 +47,12 @@ def _needs_update(existing: dict[str, Any], scraped: dict[str, Any]) -> bool:
     for field in compare_fields:
         if str(existing.get(field) or "") != str(scraped.get(field) or ""):
             return True
-    if scraped.get("image_url") and not existing.get("image_embedding"):
+    # Embedding presence is attached as boolean flags when vectors are not fetched.
+    has_image = existing.get("image_embedding") or existing.get("_has_image_embedding")
+    has_info = existing.get("info_embedding") or existing.get("_has_info_embedding")
+    if scraped.get("image_url") and not has_image:
         return True
-    if not existing.get("info_embedding"):
+    if not has_info:
         return True
     return False
 
@@ -107,15 +110,23 @@ def run_scrape() -> dict[str, Any]:
 
     supa = SupabaseClient()
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         future_scrape = executor.submit(scrape_all_categories)
         future_existing = executor.submit(supa.fetch_existing_products, cfg.SOURCE)
+        future_emb = executor.submit(supa.fetch_urls_with_embeddings, cfg.SOURCE)
         scraped = future_scrape.result()
         existing = future_existing.result()
+        emb_urls = future_emb.result()
 
     if not scraped:
         logger.error("No products scraped")
         return {"total": 0}
+
+    # Attach cheap embedding-presence flags (vectors intentionally not loaded).
+    for url, row in existing.items():
+        row["_has_image_embedding"] = url in emb_urls.get("image", set())
+        row["_has_info_embedding"] = url in emb_urls.get("info", set())
+        row["_has_back_embedding"] = url in emb_urls.get("back", set())
 
     to_embed: list[dict[str, Any]] = []
     unchanged = 0
@@ -125,33 +136,40 @@ def run_scrape() -> dict[str, Any]:
             to_embed.append(record)
         elif _needs_update(existing[url], record):
             prev = existing[url]
+            # No vector payloads in artifact — embed workers regenerate as needed.
             record["_existing"] = {
                 "image_url": prev.get("image_url"),
                 "back_image_url": prev.get("back_image_url"),
-                "image_embedding": prev.get("image_embedding"),
-                "back_image_embedding": prev.get("back_image_embedding"),
-                "info_embedding": prev.get("info_embedding"),
+                "_has_image_embedding": prev.get("_has_image_embedding"),
+                "_has_info_embedding": prev.get("_has_info_embedding"),
+                "_has_back_embedding": prev.get("_has_back_embedding"),
             }
             to_embed.append(record)
         else:
             unchanged += 1
 
+    # Lightweight map for embed_products (no vectors).
     existing_embeddings = {}
     for purl, row in existing.items():
         existing_embeddings[purl] = {
             "image_url": row.get("image_url"),
             "back_image_url": row.get("back_image_url"),
-            "image_embedding": row.get("image_embedding"),
-            "back_image_embedding": row.get("back_image_embedding"),
-            "info_embedding": row.get("info_embedding"),
+            "_has_image_embedding": row.get("_has_image_embedding"),
+            "_has_info_embedding": row.get("_has_info_embedding"),
+            "_has_back_embedding": row.get("_has_back_embedding"),
         }
 
     Path("logs").mkdir(exist_ok=True)
+    # Drop heavy/unused keys from existing before serializing artifact
+    existing_light = {
+        u: {k: v for k, v in row.items() if not k.startswith("image_embedding") and not k.startswith("back_image_embedding") and not k.startswith("info_embedding")}
+        for u, row in existing.items()
+    }
     output = {
         "scraped": scraped,
         "to_embed": to_embed,
         "existing_embeddings": existing_embeddings,
-        "existing": existing,
+        "existing": existing_light,
         "unchanged": unchanged,
     }
     out_path = Path("logs/scrape_output.json")

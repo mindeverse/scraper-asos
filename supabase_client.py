@@ -28,13 +28,13 @@ class SupabaseClient:
         self.client = create_client(cfg.SUPABASE_URL, cfg.SUPABASE_KEY)
 
     def fetch_existing_products(self, source: str) -> dict[str, dict[str, Any]]:
-        """Load all existing products for source, paginated past PostgREST row cap."""
+        """Load existing product scalars for source (no vector columns — avoids statement timeouts)."""
         result: dict[str, dict[str, Any]] = {}
         page_size = 1000
+        # Never select embedding vectors here: 768-d floats × 100k rows times out PostgREST.
         select_cols = (
             "id,product_url,title,price,sale,category,description,"
-            "image_url,back_image_url,additional_images,size,tags,metadata,gender,"
-            "image_embedding,back_image_embedding,info_embedding"
+            "image_url,back_image_url,additional_images,size,tags,metadata,gender"
         )
         try:
             start = 0
@@ -58,6 +58,47 @@ class SupabaseClient:
         except Exception as e:
             logger.error("Failed to fetch existing products: %s", e)
         return result
+
+    def fetch_urls_with_embeddings(self, source: str) -> dict[str, set[str]]:
+        """Return sets of product_urls that already have image / info / back embeddings.
+
+        Only selects product_url filtered by non-null embedding — cheap vs pulling vectors.
+        """
+        out: dict[str, set[str]] = {
+            "image": set(),
+            "info": set(),
+            "back": set(),
+        }
+        page_size = 1000
+        col_map = {
+            "image": "image_embedding",
+            "info": "info_embedding",
+            "back": "back_image_embedding",
+        }
+        try:
+            for kind, col in col_map.items():
+                start = 0
+                while True:
+                    response = (
+                        self.client.table("products")
+                        .select("product_url")
+                        .eq("source", source)
+                        .not_.is_(col, "null")
+                        .range(start, start + page_size - 1)
+                        .execute()
+                    )
+                    rows = response.data or []
+                    if not rows:
+                        break
+                    for row in rows:
+                        out[kind].add(row["product_url"])
+                    if len(rows) < page_size:
+                        break
+                    start += page_size
+                logger.info("URLs with %s embedding: %d", kind, len(out[kind]))
+        except Exception as e:
+            logger.error("Failed to fetch embedding URL sets: %s", e)
+        return out
 
     def _upsert_single_batch(self, batch: list[dict[str, Any]], batch_idx: int) -> tuple[int, int]:
         """Upsert a single batch with retries."""
